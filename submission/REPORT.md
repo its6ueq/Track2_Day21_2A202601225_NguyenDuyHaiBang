@@ -116,6 +116,8 @@ $ curl -X POST http://13.212.129.221:8000/predict -H 'Content-Type: application/
 {"detail":"Expected 12 features, got 3"}      # HTTP 400
 ```
 
+> **Lưu ý về chi phí:** sau khi thu thập xong toàn bộ bằng chứng ở trên, EC2 instance đã được `stop` để tiết kiệm credit AWS. IP public `13.212.129.221` là loại cấp tự động nên sẽ đổi khi instance khởi động lại. Muốn demo lại: `aws ec2 start-instances --instance-ids i-01c22886abc8dd4e7`, lấy IP mới, cập nhật secret `VM_HOST`; service `mlops-serve` tự khởi động cùng máy (`systemctl enable`) và tự tải model mới nhất từ S3.
+
 ---
 
 ## 4. Khó Khăn Gặp Phải & Cách Xử Lý
