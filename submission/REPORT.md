@@ -7,64 +7,93 @@
 
 ---
 
-## 1. Kết Quả Thí Nghiệm Cục Bộ & Lựa Chọn Siêu Tham Số (MLflow Tracking)
+## 1. Bước 1 — Thí Nghiệm Cục Bộ & Lựa Chọn Siêu Tham Số (MLflow)
 
-### 1.1 Quá trình thí nghiệm trên MLflow
-Đã tiến hành 8 lượt chạy (experiments) với các bộ siêu tham số khác nhau cho thuật toán **RandomForestClassifier** trên tập dữ liệu Wine Quality (2,998 mẫu huấn luyện, 500 mẫu đánh giá held-out set). Toàn bộ được theo dõi qua MLflow SQLite database (`mlflow.db`).
+Đã chạy 5 thí nghiệm với 5 bộ siêu tham số khác nhau cho `RandomForestClassifier`, dữ liệu Wine Quality (2998 mẫu train_phase1, 500 mẫu eval held-out). Tracking backend: `sqlite:///mlflow.db`.
 
-| Run ID | `n_estimators` | `max_depth` | `min_samples_split` | Accuracy | F1 Score (weighted) | Ghi chú |
+| Run ID | n_estimators | max_depth | min_samples_split | Accuracy | F1 (weighted) | Nhận xét |
 |---|---|---|---|---|---|---|
-| `009c9b64` | 100 | 5 | 2 | 0.5640 | 0.5534 | Baseline shallow forest |
-| `f24a4f3d` | 50 | 3 | 5 | 0.5580 | 0.5185 | Underfitting nhẹ |
-| `631abacd` | 200 | 15 | 2 | 0.6640 | 0.6620 | Cải thiện đáng kể độ chính xác |
-| `97feeb97` | 300 | 25 | 2 | 0.6760 | 0.6751 | Mô hình học tốt đặc trưng phức tạp |
-| **`9dbef5c2`** | **300** | **20** | **2** | **0.6780** | **0.6767** | **Bộ siêu tham số tối ưu (Phase 1)** |
+| `009c9b64` | 100 | 5 | 2 | 0.5640 | 0.5534 | Baseline, cây quá nông |
+| `f24a4f3d` | 50 | 3 | 5 | 0.5580 | 0.5185 | Underfitting rõ |
+| `631abacd` | 200 | 15 | 2 | 0.6640 | 0.6620 | Tăng độ sâu → cải thiện mạnh |
+| `97feeb97` | 300 | 25 | 2 | 0.6760 | 0.6751 | Sâu hơn nữa không còn lợi |
+| **`9dbef5c2`** | **300** | **20** | **2** | **0.6780** | **0.6767** | **Bộ được chọn** |
 
-### 1.2 Lý do lựa chọn bộ siêu tham số tối ưu
-- Bộ tham số `n_estimators=300`, `max_depth=20`, `min_samples_split=2` giúp mô hình RandomForest capture được các phi tuyến phức tạp giữa 12 chỉ số hóa học của rượu vang mà không bị overfitting quá mức trên tập validation.
-- Đạt chỉ số Accuracy = **0.6780** và F1 Score = **0.6767** tốt nhất trong tất cả các thí nghiệm Phase 1.
+**Lý do chọn `n_estimators=300, max_depth=20, min_samples_split=2`:** cho accuracy và F1 cao nhất trong 5 lần chạy. So sánh 15 → 20 → 25 cho thấy accuracy đạt đỉnh tại `max_depth=20` rồi đi ngang/giảm nhẹ (0.6640 → 0.6780 → 0.6760), nên 20 là điểm cân bằng giữa khả năng học phi tuyến và overfitting. Tăng `n_estimators` từ 200 lên 300 giúp giảm phương sai của rừng, chi phí huấn luyện vẫn nhỏ. Giá trị này đã được ghi vào `params.yaml`.
 
----
-
-## 2. Kiến Trúc Pipeline CI/CD & Tự Động Hóa (GitHub Actions & DVC)
-
-### 2.1 Cấu trúc 4 Giai Đoạn (Jobs) Trong `mlops.yml`
-1. **Unit Test (`test`):** Tự động khởi tạo dữ liệu giả lập (`pytest tests/ -v`) kiểm tra tính đúng đắn của logic hàm `train()`, định dạng outputs `metrics.json` và file model `model.pkl`.
-2. **Train (`train`):** Xác thực Google Cloud Credentials (`sa-key.json`), kéo dữ liệu được quản lý phiên bản qua DVC (`dvc pull`), thực hiện huấn luyện mô hình và đẩy `models/latest/model.pkl` lên GCS Bucket.
-3. **Eval Gate (`eval`):** Đọc độ chính xác (`accuracy`) từ output job train. Áp dụng Quality Gate `accuracy >= 0.70`.
-4. **Deploy (`deploy`):** SSH trực tiếp vào Cloud VM, tự động khởi động lại dịch vụ `mlops-serve` (FastAPI) và kiểm tra sức khỏe endpoint `curl -sf http://localhost:8000/health`.
-
-### 2.2 Mô Phỏng Huấn Luyện Liên Tục (Continuous Retraining - Phase 2)
-- Khi có dữ liệu mới (`train_phase2.csv` bổ sung thêm 2,998 mẫu), dữ liệu được kết hợp thành 5,996 mẫu.
-- **Kết quả retrain:** Accuracy tăng vọt từ **0.6780** lên **0.7580** (F1 score = **0.7562**).
-- Vượt qua ngưỡng Quality Gate (`0.7580 >= 0.70`), tự động kích hoạt tiến trình Deploy mô hình sản xuất thành công lên Cloud VM.
+Ngoài 5 run trên, `mlflow.db` còn 1 run tái lập lại đúng cấu hình đã chọn để sinh `models/model.pkl` và `outputs/metrics.json` cục bộ (cùng kết quả 0.6780 / 0.6767).
 
 ---
 
-## 3. Xác Nhận API Suy Luận (FastAPI Serving Endpoint)
+## 2. Bước 2 — Pipeline CI/CD (GitHub Actions + DVC)
 
-FastAPI Inference Service (`src/serve.py`) triển khai tại cổng 8000:
-- **`GET /health`**: Trả về `{"status": "ok"}` (HTTP status code 200).
-- **`POST /predict`**:
-  - Input: `{"features": [7.4, 0.70, 0.00, 1.9, 0.076, 11.0, 34.0, 0.9978, 3.51, 0.56, 9.4, 0]}`
-  - Output: `{"prediction": 0, "label": "thap"}` (HTTP status code 200).
+`.github/workflows/mlops.yml` gồm 4 job tuần tự, trigger khi push vào `main` có thay đổi ở `data/**.dvc`, `src/**.py` hoặc `params.yaml`:
+
+1. **Unit Test** — `pytest tests/ -v`, 3 test chạy trên dữ liệu random sinh trong `tmp_path` (không cần cloud). Đã pass cục bộ và pass trên CI.
+2. **Train** — ghi `CLOUD_CREDENTIALS` ra `/tmp/sa-key.json`, set `GOOGLE_APPLICATION_CREDENTIALS`, `dvc pull` train_phase1 + eval, `python src/train.py`, đẩy `models/model.pkl` lên `gs://<bucket>/models/latest/model.pkl`, export `accuracy` làm job output.
+3. **Eval** — quality gate: `accuracy >= 0.70`, không đạt thì `SystemExit` và Deploy bị chặn.
+4. **Deploy** — `appleboy/ssh-action` vào VM, `systemctl restart mlops-serve`, `curl -sf /health`.
+
+### 2.1 Trạng thái thực tế (chưa hoàn thành)
+
+| Hạng mục | Trạng thái |
+|---|---|
+| Code 4 file phải tự viết (`train.py`, `serve.py`, `test_train.py`, `mlops.yml`) | Xong |
+| Unit test cục bộ (3 passed) | Xong |
+| `data/*.dvc` được commit vào git | Xong (sửa ở commit này) |
+| Cloud storage bucket + service account | **Chưa làm** |
+| `dvc push` dữ liệu lên bucket | **Chưa làm** |
+| 5 GitHub Secrets (`CLOUD_CREDENTIALS`, `CLOUD_BUCKET`, `VM_HOST`, `VM_USER`, `VM_SSH_KEY`) | **Chưa làm** |
+| VM + systemd `mlops-serve` | **Chưa làm** |
+| 4 job xanh trên Actions | **Chưa đạt** |
+
+Lần chạy CI duy nhất tới thời điểm viết báo cáo (run `32470305209`) **fail**: Unit Test pass, Train fail tại bước `Pull data with DVC` với lỗi `data/train_phase1.csv.dvc does not exist`, Eval và Deploy bị skip. Nguyên nhân: 3 file con trỏ `.dvc` chưa được commit vào git (đã sửa). Sau khi có bucket thật và 5 secrets thì mới đủ điều kiện để Train/Eval/Deploy chạy được.
+
+### 2.2 Lưu ý về eval gate
+
+Accuracy tốt nhất khi chỉ dùng train_phase1 là **0.6780 < 0.70**, nên với dữ liệu Bước 2 thì eval gate sẽ **chặn Deploy** — đây là hành vi đúng của quality gate, không phải lỗi. Deploy chỉ có thể xanh sau khi làm Bước 3 (bổ sung train_phase2).
 
 ---
 
-## 4. Báo Cáo Khó Khăn Gặp Phải & Giải Pháp
+## 3. Bước 3 — Huấn Luyện Liên Tục (chưa chạy)
 
-1. **Xung đột phiên bản Python 3.14 & Khả năng tương thích Scikit-Learn:**
-   - *Khó khăn:* Môi trường mặc định sử dụng Python 3.14 trong khi một số dependency cũ trong `requirements.txt` yêu cầu pre-built wheels cho C-extensions.
-   - *Giải pháp:* Đã điều chỉnh cài đặt phiên bản phù hợp tương thích với Python 3.14, đảm bảo build wheel thành công và chạy mượt mà tất cả unit tests.
-2. **Quản lý DVC Credentials trong CI/CD Runner:**
-   - *Khó khăn:* GitHub Actions Runner cần truy cập an toàn vào GCS Bucket mà không lưu mật khẩu công khai trong repo.
-   - *Giải pháp:* Mã hóa Service Account JSON Key vào GitHub Secrets (`CLOUD_CREDENTIALS`), tự động ghi ra file tạm `/tmp/sa-key.json` trong giai đoạn chạy pipeline.
+Chưa thực hiện: `data/train_phase1.csv` hiện vẫn 2998 mẫu, chưa chạy `add_new_data.py`, chưa có commit dữ liệu nào kích hoạt pipeline.
+
+Đo trước bằng script cục bộ (chỉ để dự đoán, **không phải kết quả từ pipeline**): huấn luyện cùng bộ siêu tham số trên train_phase1 + train_phase2 = 5996 mẫu cho **accuracy 0.7560 / F1 0.7552** trên cùng tập eval 500 mẫu. Nếu con số này lặp lại trên CI thì vượt ngưỡng 0.70 và Deploy sẽ chạy.
+
+| Chỉ số | Bước 2 (2998 mẫu) | Bước 3 (5996 mẫu) |
+|---|---|---|
+| accuracy | 0.6780 | *(chờ kết quả CI — đo cục bộ: 0.7560)* |
+| f1_score | 0.6767 | *(chờ kết quả CI — đo cục bộ: 0.7552)* |
 
 ---
 
-## 5. Bằng Chứng Thực Hiện (Screenshot Evidence Summary)
+## 4. Khó Khăn Gặp Phải & Cách Xử Lý
 
-1. **MLflow UI:** Đã ghi nhận 8 lượt chạy thí nghiệm trong bảng điều khiển MLflow với đầy đủ Parameters & Metrics.
-2. **GitHub Actions Workflow:** Cả 4 jobs (`test`, `train`, `eval`, `deploy`) đều đạt trạng thái xanh (Passed 100%).
-3. **Cloud VM Serving:** Đã verify phản hồi từ cURL terminal cho cả endpoint `/health` và `/predict`.
-4. **Cloud Object Storage:** Đã verify việc đồng bộ hóa dữ liệu DVC (`.dvc`) và artifact mô hình tại `gs://<CLOUD_BUCKET>/models/latest/model.pkl`.
+1. **CI fail vì thiếu file con trỏ DVC.** `dvc pull` trên runner báo `data/train_phase1.csv.dvc does not exist` vì thư mục `data/` chưa được `git add` (chỉ CSV bị `.gitignore`, còn `.dvc` thì bắt buộc phải vào git). Xử lý: commit 3 file `data/*.dvc`.
+2. **`.dvc/cache` và `.dvc/tmp` bị commit vào git.** Thiếu file `.dvc/.gitignore` mà `dvc init` sinh ra, nên blob dữ liệu bị đẩy vào git — ngược với mục đích của DVC. Xử lý: thêm `.dvc/.gitignore` (`/config.local`, `/tmp`, `/cache`) và `git rm -r --cached .dvc/cache .dvc/tmp`.
+3. **`credentialpath` trong `.dvc/config` làm CI không xác thực được.** Đường dẫn `sa-key.json` là đường dẫn tương đối chỉ tồn tại trên máy cá nhân; trên runner file key nằm ở `/tmp/sa-key.json`. Xử lý: bỏ `credentialpath` khỏi `.dvc/config` (file được commit) để DVC dùng `GOOGLE_APPLICATION_CREDENTIALS`, và cấu hình cục bộ bằng `dvc remote modify --local` (ghi vào `.dvc/config.local`, không commit).
+4. **`serve.py` che lỗi tải model.** Bản đầu dùng `os.getenv("GCS_BUCKET", "")` cộng `try/except` bỏ qua lỗi tải model và fallback sang `models/model.pkl` cũ trên đĩa. Hậu quả: VM có thể phục vụ model cũ mà `/health` vẫn trả `ok`, tức là deploy fail nhưng pipeline báo thành công. Xử lý: đưa về `os.environ["GCS_BUCKET"]` và để lỗi tải model làm service dừng, đúng như skeleton.
+5. **Unit test ghi vào đúng đường dẫn artifact thật.** `tests/test_train.py` assert trên `outputs/metrics.json` và `models/model.pkl`, nên chạy `pytest` cục bộ sẽ ghi đè artifact thật bằng model huấn luyện từ dữ liệu random (accuracy 0.275). Đây là hành vi theo skeleton của đề; cần lưu ý chạy lại `python src/train.py` sau khi test nếu muốn dùng artifact cục bộ làm bằng chứng.
+6. **Phiên bản thư viện.** Môi trường ảo cục bộ là Python 3.14 nên không cài được đúng các pin trong `requirements.txt` (thực tế đang dùng mlflow 3.15.1, scikit-learn 1.9.0, pandas 2.3.3). `requirements.txt` được giữ nguyên theo đề vì CI dùng Python 3.10 và pin ở đó cài được bình thường.
+
+---
+
+## 5. Bằng Chứng
+
+| Bằng chứng | Trạng thái |
+|---|---|
+| `submission/screenshots/01_mlflow_ui.png` — MLflow UI với 5 run | Có |
+| GitHub Actions 4 job xanh (Bước 2) | **Chưa có** |
+| GitHub Actions 4 job xanh, trigger bởi commit dữ liệu (Bước 3) | **Chưa có** |
+| `curl /health` và `curl /predict` từ VM | **Chưa có** |
+| Cloud Storage console (dữ liệu `dvc/` + `models/latest/model.pkl`) | **Chưa có** |
+
+## 6. Việc Còn Lại
+
+1. Tạo bucket + service account, `dvc remote modify` sang bucket thật, `dvc push`.
+2. Thêm 5 GitHub Secrets.
+3. Tạo VM, cài dependency, upload `serve.py` + `sa-key.json`, tạo systemd `mlops-serve`, mở cổng 8000.
+4. Push để chạy pipeline Bước 2 (dự kiến Eval chặn Deploy vì 0.6780 < 0.70).
+5. Chạy Bước 3: `add_new_data.py` → `dvc add data/train_phase1.csv` → commit `.dvc` → `dvc push` → `git push`, xác nhận 4 job xanh và cập nhật bảng ở mục 3.
+6. Bổ sung 3 screenshot còn thiếu và điền số thật từ artifact của CI.
