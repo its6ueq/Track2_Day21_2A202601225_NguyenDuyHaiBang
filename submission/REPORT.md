@@ -12,17 +12,17 @@
 
 Đã chạy 5 thí nghiệm với 5 bộ siêu tham số khác nhau cho `RandomForestClassifier`, dữ liệu Wine Quality (2998 mẫu `train_phase1`, 500 mẫu `eval` held-out). Tracking backend: `sqlite:///mlflow.db`.
 
-| Run ID | n_estimators | max_depth | min_samples_split | Accuracy | F1 (weighted) | Nhận xét |
-|---|---|---|---|---|---|---|
-| `009c9b64` | 100 | 5 | 2 | 0.5640 | 0.5534 | Baseline, cây quá nông |
-| `f24a4f3d` | 50 | 3 | 5 | 0.5580 | 0.5185 | Underfitting rõ |
-| `631abacd` | 200 | 15 | 2 | 0.6640 | 0.6620 | Tăng độ sâu → cải thiện mạnh |
-| `97feeb97` | 300 | 25 | 2 | 0.6760 | 0.6751 | Sâu hơn nữa không còn lợi |
-| **`9dbef5c2`** | **300** | **20** | **2** | **0.6780** | **0.6767** | **Bộ được chọn** |
+| Run ID | Run name (trên MLflow UI) | n_estimators | max_depth | min_samples_split | Accuracy | F1 (weighted) | Nhận xét |
+|---|---|---|---|---|---|---|---|
+| `009c9b64` | `omniscient-loon-530` | 100 | 5 | 2 | 0.5640 | 0.5534 | Baseline, cây quá nông |
+| `f24a4f3d` | `victorious-mare-702` | 50 | 3 | 5 | 0.5580 | 0.5185 | Underfitting rõ |
+| `631abacd` | `placid-newt-93` | 200 | 15 | 2 | 0.6640 | 0.6620 | Tăng độ sâu → cải thiện mạnh |
+| `97feeb97` | `vaunted-hound-253` | 300 | 25 | 2 | 0.6760 | 0.6751 | Sâu hơn nữa không còn lợi |
+| **`9dbef5c2`** | **`capable-perch-860`** | **300** | **20** | **2** | **0.6780** | **0.6767** | **Bộ được chọn** |
 
 **Lý do chọn `n_estimators=300, max_depth=20, min_samples_split=2`:** cho accuracy và F1 cao nhất trong 5 lần chạy. So sánh 15 → 20 → 25 cho thấy accuracy đạt đỉnh tại `max_depth=20` rồi đi ngang/giảm nhẹ (0.6640 → 0.6780 → 0.6760), nên 20 là điểm cân bằng giữa khả năng học phi tuyến và overfitting. Tăng `n_estimators` từ 200 lên 300 giúp giảm phương sai của rừng, chi phí huấn luyện vẫn nhỏ. Giá trị này đã được ghi vào `params.yaml`.
 
-Ngoài 5 run thí nghiệm trên, `mlflow.db` còn 2 run tái lập bằng chính `src/train.py` với bộ tham số đã chọn: `0e8a0ac9` trên dữ liệu Bước 2 (2998 mẫu → 0.6780 / 0.6767) và `34155658` trên dữ liệu Bước 3 (5996 mẫu → 0.7560 / 0.7552). Tổng cộng 7 run active.
+Ngoài 5 run thí nghiệm trên, `mlflow.db` còn 2 run tái lập bằng chính `src/train.py` với bộ tham số đã chọn: `0e8a0ac9` / `auspicious-shad-906` trên dữ liệu Bước 2 (2998 mẫu → 0.6780 / 0.6767) và `34155658` / `righteous-wasp-66` trên dữ liệu Bước 3 (5996 mẫu → 0.7560 / 0.7552). Tổng cộng 7 run active trong ảnh `01_mlflow_ui.png`.
 
 ---
 
@@ -135,9 +135,11 @@ $ curl -X POST http://13.212.129.221:8000/predict -H 'Content-Type: application/
 
 | Bằng chứng | Nguồn |
 |---|---|
-| MLflow UI với các run thí nghiệm | `submission/screenshots/01_mlflow_ui.png` |
-| Quality gate chặn Deploy (Bước 2) | GitHub Actions run `32479269248` |
-| 4 job xanh, trigger bởi commit dữ liệu (Bước 3) | GitHub Actions run `32480027037` |
+| MLflow UI với 7 run (5 thí nghiệm + 2 tái lập) | `submission/screenshots/01_mlflow_ui.png` |
+| 4 job xanh, trigger bởi commit dữ liệu (Bước 3) | `submission/screenshots/02_actions_4_green.png` — Actions run `32480027037` |
+| Quality gate chặn Deploy với dữ liệu Bước 2 | `submission/screenshots/03_actions_gate_blocked.png` — Actions run `32479269248` |
+| `curl /health` và `curl /predict` tới EC2 | `submission/screenshots/04_curl_api.png` |
+| S3 console: `dvc/` + `models/latest/model.pkl` | `submission/screenshots/05_s3_console.png` |
 | Metrics từ CI | artifact `metrics` của run `32480027037`: `{"accuracy": 0.756, "f1_score": 0.7552068895839901}` |
 | Model artifact trên cloud | `s3://mlops-lab-day21-708664/models/latest/model.pkl` (62,775,265 byte) |
 | Dữ liệu trên DVC remote | `s3://mlops-lab-day21-708664/dvc/files/md5/...` (4 object) |
