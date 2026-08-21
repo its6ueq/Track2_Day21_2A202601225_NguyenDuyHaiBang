@@ -27,10 +27,10 @@ Ngoài 5 run trên, `mlflow.db` còn 1 run tái lập lại đúng cấu hình �
 
 ## 2. Bước 2 — Pipeline CI/CD (GitHub Actions + DVC)
 
-`.github/workflows/mlops.yml` gồm 4 job tuần tự, trigger khi push vào `main` có thay đổi ở `data/**.dvc`, `src/**.py` hoặc `params.yaml`:
+`.github/workflows/mlops.yml` gồm 4 job tuần tự, trigger khi push vào `main` có thay đổi ở `data/**.dvc`, `src/**.py` hoặc `params.yaml`. Cloud provider được chọn: **AWS** (S3 cho object storage, EC2 cho VM).
 
 1. **Unit Test** — `pytest tests/ -v`, 3 test chạy trên dữ liệu random sinh trong `tmp_path` (không cần cloud). Đã pass cục bộ và pass trên CI.
-2. **Train** — ghi `CLOUD_CREDENTIALS` ra `/tmp/sa-key.json`, set `GOOGLE_APPLICATION_CREDENTIALS`, `dvc pull` train_phase1 + eval, `python src/train.py`, đẩy `models/model.pkl` lên `gs://<bucket>/models/latest/model.pkl`, export `accuracy` làm job output.
+2. **Train** — đọc secret `CLOUD_CREDENTIALS` (JSON access key), export `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` qua `$GITHUB_ENV`, `dvc pull` train_phase1 + eval, `python src/train.py`, dùng boto3 đẩy `models/model.pkl` lên `s3://<bucket>/models/latest/model.pkl`, export `accuracy` làm job output.
 3. **Eval** — quality gate: `accuracy >= 0.70`, không đạt thì `SystemExit` và Deploy bị chặn.
 4. **Deploy** — `appleboy/ssh-action` vào VM, `systemctl restart mlops-serve`, `curl -sf /health`.
 
@@ -41,13 +41,18 @@ Ngoài 5 run trên, `mlflow.db` còn 1 run tái lập lại đúng cấu hình �
 | Code 4 file phải tự viết (`train.py`, `serve.py`, `test_train.py`, `mlops.yml`) | Xong |
 | Unit test cục bộ (3 passed) | Xong |
 | `data/*.dvc` được commit vào git | Xong (sửa ở commit này) |
-| Cloud storage bucket + service account | **Chưa làm** |
+| S3 bucket + IAM user (quyền chỉ trên bucket) | **Chưa làm** |
 | `dvc push` dữ liệu lên bucket | **Chưa làm** |
 | 5 GitHub Secrets (`CLOUD_CREDENTIALS`, `CLOUD_BUCKET`, `VM_HOST`, `VM_USER`, `VM_SSH_KEY`) | **Chưa làm** |
-| VM + systemd `mlops-serve` | **Chưa làm** |
+| EC2 instance + systemd `mlops-serve` | **Chưa làm** |
 | 4 job xanh trên Actions | **Chưa đạt** |
 
-Lần chạy CI duy nhất tới thời điểm viết báo cáo (run `32470305209`) **fail**: Unit Test pass, Train fail tại bước `Pull data with DVC` với lỗi `data/train_phase1.csv.dvc does not exist`, Eval và Deploy bị skip. Nguyên nhân: 3 file con trỏ `.dvc` chưa được commit vào git (đã sửa). Sau khi có bucket thật và 5 secrets thì mới đủ điều kiện để Train/Eval/Deploy chạy được.
+Hai lần chạy CI tới thời điểm viết báo cáo đều **fail** ở job Train, nhưng nguyên nhân khác nhau:
+
+- Run `32470305209`: fail tại `Pull data with DVC` với `data/train_phase1.csv.dvc does not exist` — 3 file con trỏ `.dvc` chưa được commit vào git. Đã sửa.
+- Run `32474626418` (sau khi commit `.dvc`): Unit Test pass, fail tại `Pull data with DVC` với `Anonymous caller does not have ... access to bucket 'my-mlops-bucket' (or it may not exist)` — remote vẫn trỏ tới tên bucket ví dụ trong đề, chưa có bucket thật và chưa có secrets.
+
+Nghĩa là phần code/cấu hình trong repo đã hết lỗi; điều kiện còn thiếu là hạ tầng AWS và 5 secrets.
 
 ### 2.2 Lưu ý về eval gate
 
@@ -72,8 +77,8 @@ Chưa thực hiện: `data/train_phase1.csv` hiện vẫn 2998 mẫu, chưa ch�
 
 1. **CI fail vì thiếu file con trỏ DVC.** `dvc pull` trên runner báo `data/train_phase1.csv.dvc does not exist` vì thư mục `data/` chưa được `git add` (chỉ CSV bị `.gitignore`, còn `.dvc` thì bắt buộc phải vào git). Xử lý: commit 3 file `data/*.dvc`.
 2. **`.dvc/cache` và `.dvc/tmp` bị commit vào git.** Thiếu file `.dvc/.gitignore` mà `dvc init` sinh ra, nên blob dữ liệu bị đẩy vào git — ngược với mục đích của DVC. Xử lý: thêm `.dvc/.gitignore` (`/config.local`, `/tmp`, `/cache`) và `git rm -r --cached .dvc/cache .dvc/tmp`.
-3. **`credentialpath` trong `.dvc/config` làm CI không xác thực được.** Đường dẫn `sa-key.json` là đường dẫn tương đối chỉ tồn tại trên máy cá nhân; trên runner file key nằm ở `/tmp/sa-key.json`. Xử lý: bỏ `credentialpath` khỏi `.dvc/config` (file được commit) để DVC dùng `GOOGLE_APPLICATION_CREDENTIALS`, và cấu hình cục bộ bằng `dvc remote modify --local` (ghi vào `.dvc/config.local`, không commit).
-4. **`serve.py` che lỗi tải model.** Bản đầu dùng `os.getenv("GCS_BUCKET", "")` cộng `try/except` bỏ qua lỗi tải model và fallback sang `models/model.pkl` cũ trên đĩa. Hậu quả: VM có thể phục vụ model cũ mà `/health` vẫn trả `ok`, tức là deploy fail nhưng pipeline báo thành công. Xử lý: đưa về `os.environ["GCS_BUCKET"]` và để lỗi tải model làm service dừng, đúng như skeleton.
+3. **Cấu hình DVC remote theo provider.** Bản đầu để `credentialpath = sa-key.json` trong `.dvc/config` (cấu hình GCP theo ví dụ mặc định của đề). Đường dẫn tương đối này chỉ tồn tại trên máy cá nhân nên CI runner không xác thực được. Xử lý: chọn AWS làm provider, đổi remote sang `s3://`, bỏ `credentialpath` khỏi file `.dvc/config` được commit — trên CI thì `dvc-s3`/boto3 đọc `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` từ môi trường, trên máy cá nhân đọc `~/.aws/credentials` (hoặc `.dvc/config.local` không commit).
+4. **`serve.py` che lỗi tải model.** Bản đầu dùng `os.getenv("GCS_BUCKET", "")` cộng `try/except` bỏ qua lỗi tải model và fallback sang `models/model.pkl` cũ trên đĩa. Hậu quả: VM có thể phục vụ model cũ mà `/health` vẫn trả `ok`, tức là deploy fail nhưng pipeline báo thành công. Xử lý: chuyển sang boto3 với `os.environ["S3_BUCKET"]` và để lỗi tải model làm service dừng, đúng tinh thần skeleton.
 5. **Unit test ghi vào đúng đường dẫn artifact thật.** `tests/test_train.py` assert trên `outputs/metrics.json` và `models/model.pkl`, nên chạy `pytest` cục bộ sẽ ghi đè artifact thật bằng model huấn luyện từ dữ liệu random (accuracy 0.275). Đây là hành vi theo skeleton của đề; cần lưu ý chạy lại `python src/train.py` sau khi test nếu muốn dùng artifact cục bộ làm bằng chứng.
 6. **Phiên bản thư viện.** Môi trường ảo cục bộ là Python 3.14 nên không cài được đúng các pin trong `requirements.txt` (thực tế đang dùng mlflow 3.15.1, scikit-learn 1.9.0, pandas 2.3.3). `requirements.txt` được giữ nguyên theo đề vì CI dùng Python 3.10 và pin ở đó cài được bình thường.
 
@@ -86,14 +91,14 @@ Chưa thực hiện: `data/train_phase1.csv` hiện vẫn 2998 mẫu, chưa ch�
 | `submission/screenshots/01_mlflow_ui.png` — MLflow UI với 5 run | Có |
 | GitHub Actions 4 job xanh (Bước 2) | **Chưa có** |
 | GitHub Actions 4 job xanh, trigger bởi commit dữ liệu (Bước 3) | **Chưa có** |
-| `curl /health` và `curl /predict` từ VM | **Chưa có** |
-| Cloud Storage console (dữ liệu `dvc/` + `models/latest/model.pkl`) | **Chưa có** |
+| `curl /health` và `curl /predict` từ EC2 | **Chưa có** |
+| S3 console (dữ liệu `dvc/` + `models/latest/model.pkl`) | **Chưa có** |
 
 ## 6. Việc Còn Lại
 
-1. Tạo bucket + service account, `dvc remote modify` sang bucket thật, `dvc push`.
-2. Thêm 5 GitHub Secrets.
-3. Tạo VM, cài dependency, upload `serve.py` + `sa-key.json`, tạo systemd `mlops-serve`, mở cổng 8000.
+1. Tạo S3 bucket + IAM user có policy giới hạn trên bucket, lấy access key; `dvc remote modify myremote url s3://<bucket>/dvc` rồi `dvc push`.
+2. Thêm 5 GitHub Secrets (`CLOUD_CREDENTIALS` là JSON `{"aws_access_key_id": ..., "aws_secret_access_key": ...}`).
+3. Tạo EC2 instance Ubuntu 22.04, security group mở tcp 22 + 8000, cài dependency, upload `serve.py`, đặt credentials ở `~/.aws/credentials`, tạo systemd `mlops-serve` với `Environment="S3_BUCKET=<bucket>"`.
 4. Push để chạy pipeline Bước 2 (dự kiến Eval chặn Deploy vì 0.6780 < 0.70).
 5. Chạy Bước 3: `add_new_data.py` → `dvc add data/train_phase1.csv` → commit `.dvc` → `dvc push` → `git push`, xác nhận 4 job xanh và cập nhật bảng ở mục 3.
 6. Bổ sung 3 screenshot còn thiếu và điền số thật từ artifact của CI.

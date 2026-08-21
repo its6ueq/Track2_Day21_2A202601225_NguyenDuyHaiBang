@@ -9,6 +9,10 @@ on:
       - 'params.yaml'
   workflow_dispatch:
 
+# Region cua S3 bucket. Doi lai neu bucket cua ban o region khac.
+env:
+  AWS_DEFAULT_REGION: ap-southeast-1
+
 jobs:
 
   # ---------------------------------------------------------------------------
@@ -57,9 +61,14 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Authenticate to Cloud Storage
+        env:
+          CLOUD_CREDENTIALS: ${{ secrets.CLOUD_CREDENTIALS }}
         run: |
-          echo '${{ secrets.CLOUD_CREDENTIALS }}' > /tmp/sa-key.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json" >> $GITHUB_ENV
+          # Secret CLOUD_CREDENTIALS la JSON:
+          # {"aws_access_key_id": "...", "aws_secret_access_key": "..."}
+          # Ghi ra $GITHUB_ENV de dvc (dvc-s3) va boto3 tu doc o cac buoc sau.
+          echo "AWS_ACCESS_KEY_ID=$(jq -r .aws_access_key_id <<< "$CLOUD_CREDENTIALS")" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=$(jq -r .aws_secret_access_key <<< "$CLOUD_CREDENTIALS")" >> $GITHUB_ENV
 
       - name: Pull data with DVC
         run: dvc pull data/train_phase1.csv.dvc data/eval.csv.dvc
@@ -79,13 +88,11 @@ jobs:
         run: |
           python - <<'EOF'
           import os
-          from google.cloud import storage
+          import boto3
           bucket_name = os.environ["CLOUD_BUCKET"]
-          client = storage.Client()
-          bucket = client.bucket(bucket_name)
-          blob = bucket.blob("models/latest/model.pkl")
-          blob.upload_from_filename("models/model.pkl")
-          print(f"Uploaded models/model.pkl to gs://{bucket_name}/models/latest/model.pkl")
+          client = boto3.client("s3")
+          client.upload_file("models/model.pkl", bucket_name, "models/latest/model.pkl")
+          print(f"Uploaded models/model.pkl to s3://{bucket_name}/models/latest/model.pkl")
           EOF
 
       - name: Save metrics as artifact
